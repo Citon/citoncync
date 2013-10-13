@@ -18,8 +18,8 @@ schedule - Install/update crontab entry
 
 "
 
-# Our date function of choice
-DATESTAMP='date --rfc-3339=seconds'
+# Our date function of choice - Spits out RFC3339 happy time
+DATESTAMP='date +%Y-%m-%dT%H:%M:%S%z'
 
 
 # Display the current configuration and creates/displays SSH public key
@@ -99,9 +99,7 @@ do_schedule() {
 	    echo "Attempting to reload crontab"
 	    `${CRONRESTART}`
 	fi
-
-        # Generate (if needed) and display our SSH public key
-        show_keypair
+    fi
 }
 
 
@@ -119,8 +117,32 @@ rotate_logs() {
 }
 
 
+# Locking - A necissary evil to prevent pile ups if replication takes too long
+# Uses the semi-reliable noclobber method (see
+# http://stackoverflow.com/a/4936722/383002)  Since replicate should not be
+# called in a tight loop it should be good enough for our purposes.
+popnlock() {
+    if (set -o noclobber; echo "$$" > "${SCRIPTBASE}/.${MYNAME}.pid") 2> /dev/null; then
+	trap 'rm -f "${SCRIPTBASE}/.${MYNAME}.pid"; exit $?' INT TERM EXIT
+    else
+	echo `${DATESTAMP}` "Previous instance running - .${MYNAME}.pid with live pid. Exiting." >> ${LOGFILE}
+	exit 1
+    fi
+}
+
+
+# Unlock
+popunlock() {
+    rm -f "${SCRIPTBASE}/.${MYNAME}.pid"
+    trap - INT TERM EXIT
+}
+
 # Replicate!
 do_replicate() {
+    # Attempt to lock before rotating logs - popnlock() will kill the script
+    # if it fails
+    popnlock
+
     rotate_logs
     echo `${DATESTAMP}` "Starting replication to ${DESTUSER}@${DESTHOST}:${DESTBASE}" > ${LOGFILE}
 
@@ -138,4 +160,7 @@ do_replicate() {
     rsync ${SYNCOPTS} -e "ssh -i${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
 	    ${SCRIPTBASE}/ ${DESTHOST}:${DESTBASE}/.citoncync/ >> ${LOGFILE} 2>&1
     echo `${DATESTAMP}` "End metadata and script replication" >> ${LOGFILE}
+
+    # Clear the lock
+    popunlock
 }
