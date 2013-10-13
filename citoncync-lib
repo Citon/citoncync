@@ -1,0 +1,141 @@
+#!/bin/bash
+
+# 2013 Citon Computer Corporation
+# Author: Paul Hirsch <paul.hirsch@citon.com>
+
+# citoncync-lib - Common functions for client scripts
+
+USAGE="
+$MYSCRIPT - Use RSync over SSH to replicate to offsite storage
+
+Usage:
+
+ $MYSCRIPT {replicate|showconfig|schedule}
+
+replicate - Sync to remote replication target
+showconfig - Show current configuration
+schedule - Install/update crontab entry
+
+"
+
+# Our date function of choice
+DATESTAMP='date --rfc-3339=seconds'
+
+
+# Display the current configuration and creates/displays SSH public key
+show_config() {
+    echo "* Current configuration for $0:"
+    echo
+    for i in SCRIPTBASE SOURCEBASE DESTHOST DESTPORT DESTUSER DESTBASE SCHEDULE SYNCOPTS LOGFILE LOGKEEP CRONTAB CRONRESTART; do
+	# Sure it looks odd but this is how we display the vals without globbing
+	eval echo ${i} = \"\$$i\"
+    done
+    echo "SOURCES =" ${SOURCES[@]}
+    
+    echo
+    echo "* Checking SSH keypair"
+    show_keypair
+}
+
+
+# Generate a new SSH keypair
+generate_keypair() {
+    if [ ! -d ${SCRIPTBASE} ]; then
+	echo "FATAL: ${SCRIPTBASE} does not exist or is not a directory!"
+	exit 1
+    fi
+
+    ssh-keygen -b 2048 -C "${DESTUSER}@`hostname`" -q -t rsa -N "" -f ${SCRIPTBASE}/${DESTUSER}_id_rsa
+}
+
+
+# Check SSH key and display public key
+show_keypair() {
+    if [ ! -f ${SCRIPTBASE}/${DESTUSER}_id_rsa ]; then
+	echo "Missing SSH keypair - Generating ${SCRIPTBASE}/${DESTUSER}_id_rsa keypair"
+	generate_keypair
+    fi
+    echo
+    echo "* Displaying public SSH key for ${DESTUSER}"
+    echo 
+    echo "  (Copy the text between the -- CUT HERE-- marks into the remote user"
+    echo "  authorized_keys file to allow automatic login)"
+    echo "-------- CUT HERE --------------"
+    cat ${SCRIPTBASE}/${DESTUSER}_id_rsa.pub
+    echo "-------- CUT HERE --------------"
+}
+
+
+# Install our custom crontab entry and create (if needed) then display
+# our public SSH key
+do_schedule() {
+    if [ X${CRONTAB} = "X" ]; then
+	echo "CRONTAB not set - Skipping scheduling"
+    else
+	echo "* Adding/replacing our crontab entry"
+	if [ ! -f ${CRONTAB} ]; then
+	    echo "FATAL: Can not find CRONTAB file ${CRONTAB}"
+	    exit 1
+	fi
+	
+        # Remove our existing line
+	CRONTEXT=`cat ${CRONTAB} | grep -v ${MYSCRIPT}`
+	
+        # Overwrite the crontab with a clean version
+	echo "${CRONTEXT}" > ${CRONTAB}
+
+        # Append out scheduling line
+        echo "${SCHEDULE} ${SCRIPTBASE}/${MYSCRIPT}" >> ${CRONTAB}
+
+        # Show the tab
+        echo "Your current ${CRONTAB} is now:"
+        cat ${CRONTAB}
+
+	echo
+	echo
+
+	# Restart cron if a command is defined
+	if [ X${CRONRESTART} != "X" ]; then
+	    echo "Attempting to reload crontab"
+	    `${CRONRESTART}`
+	fi
+
+        # Generate (if needed) and display our SSH public key
+        show_keypair
+}
+
+
+# Shift the logs up
+rotate_logs() {
+    for i in `seq ${LOGKEEP} 1`; do
+	j=$(( $i - 1 ))
+	if [ -f ${LOGFILE}.${j} ]; then
+	    mv -f ${LOFGILE}.${j} ${LOGFILE}.${i}
+	fi
+    done
+    if [ -f ${LOGFILE} ]; then
+	mv -f ${LOGFILE} ${LOGFILE}.0
+    fi
+}
+
+
+# Replicate!
+do_replicate() {
+    rotate_logs
+    echo `${DATESTAMP}` "Starting replication to ${DESTUSER}@${DESTHOST}:${DESTBASE}" > ${LOGFILE}
+
+    for source in ${SOURCES[@]}; do	
+	echo `${DATESTAMP}` "Replicating ${SOURCEBASE}/${source} to ${DESTBASE}/${source}" >> ${LOGFILE}
+
+	# Now for the MAGIC!  The whole reason for all this.  Replication.
+	rsync ${SYNCOPTS} -e "ssh -i${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
+	    ${SOURCEBASE}/${source} ${DESTHOST}:${DESTBASE}/ >> ${LOGFILE} 2>&1
+    done
+
+    echo `${DATESTAMP}` "End data replication" >> ${LOGFILE}
+
+    # Now we sync the SCRIPTBASE directory, including logs, to .citoncync/
+    rsync ${SYNCOPTS} -e "ssh -i${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
+	    ${SCRIPTBASE}/ ${DESTHOST}:${DESTBASE}/.citoncync/ >> ${LOGFILE} 2>&1
+    echo `${DATESTAMP}` "End metadata and script replication" >> ${LOGFILE}
+}

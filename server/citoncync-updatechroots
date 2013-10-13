@@ -1,0 +1,93 @@
+#!/bin/sh
+
+# Copyright 2013, Citon Computer Corporation
+# Author: Paul Hirsch
+
+# citoncync-updatechroots - Server side script to update our set of chroot
+#  and libs and copy into all customer chroot folders.  Also
+#  resets permissions chroot root directories to root.root
+#  and creates a data/ folder for each user if one is not present
+
+# chroot user directories should all be under the following
+CHROOTHOMEBASE=/mnt/z1
+
+# chroot build working directory
+SCRATCH=/mnt/z1/citoncync-server/chrootskel
+
+# Binaries we need to include and pull libs for
+RSYNCBIN=/usr/local/bin/rsync
+BASHBIN=/bin/bash
+LSBIN=/bin/ls
+LDELF=/libexec/ld-elf.so.1
+
+# Sanity check on the chrootskel dir
+if [  x${SCRATCH} = "x" -o x${SCRATCH} = "x/" ]; then
+        echo "Invalid SCRATCH location - Must be in non-root folder"
+        exit 1
+fi
+
+# Attempt to create the scratch dir if it is not present
+for i in tbin tlib tlibexec tetc; do
+        if [ ! -d ${SCRATCH}/${i} ]; then
+                echo "Creating ${SCRATCH}/${i}"
+                mkdir -p ${SCRATCH}/${i}
+        fi
+done
+
+# Clear the skeleton
+for i in bin lib libexec etc; do
+        echo "Clearing ${SCRATCH}/t${i}"
+        rm -f ${SCRATCH}/t${i}/*
+done
+
+# Copy binaries and criticals
+echo "Populating binaries..."
+cp -p ${RSYNCBIN} ${SCRATCH}/tbin/
+cp -p ${BASHBIN} ${SCRATCH}/tbin/sh
+cp -p ${LSBIN} ${SCRATCH}/tbin/
+cp -p ${LDELF} ${SCRATCH}/tlibexec/
+
+# Copy required libraries
+echo "Populating libraries..."
+for i in ${RSYNCBIN} ${BASHBIN} ${LSBIN}; do
+        for j in `ldd -f "%p\n" ${i}`; do
+                cp -p ${j} ${SCRATCH}/tlib
+        done
+done
+
+# Copy required etc files
+for i in "/etc/localtime /etc/motd"; do
+        cp -p ${i} ${SCRATCH}/tetc
+done
+
+echo "Done updating ${SCRATCH}"
+
+
+# Cycle through valid customer folders
+for cust in `ls ${CHROOTHOMEBASE} | egrep '^[0-9a-zA-Z]'`; do
+        # Cycle through the per-device subfolders
+        for i in `ls ${CHROOTHOMEBASE}/${cust} | egrep '^[0-9a-zA-Z]'`; do
+                echo "Processing ${i}"
+                if [ ! -d ${CHROOTHOMEBASE}/${cust}/${i}/data ]; then
+                        mkdir ${CHROOTHOMEBASE}/${cust}/${i}/data
+                fi
+
+                echo "Resetting permissions on ${CHROOTHOMEBASE}/${cust}/${i} and ${CHROOTHOMEBASE}/${cust}/${i}/data"
+                chown root:wheel ${CHROOTHOMEBASE}/${cust}/${i}
+                chmod 755 ${CHROOTHOMEBASE}/${cust}/${i}
+                chown ${i}:${i} ${CHROOTHOMEBASE}/${cust}/${i}/data
+                chmod 700 ${CHROOTHOMEBASE}/${cust}/${i}/data
+
+                for j in bin lib libexec etc; do
+                        if [ ! -d ${CHROOTHOMEBASE}/${cust}/${i}/${j} ]; then
+                                echo "Making missing dir: ${CHROOTHOMEBASE}/${cust}/${i}/${j}"
+                                mkdir ${CHROOTHOMEBASE}/${cust}/${i}/${j}
+                                chown root:wheel ${CHROOTHOMEBASE}/${cust}/${i}/${j}
+                                chmod 755 ${CHROOTHOMEBASE}/${cust}/${i}/${j}
+                        fi
+
+                        # Update files  
+                        rsync -a --delete-after ${SCRATCH}/t${j}/ ${CHROOTHOMEBASE}/${cust}/${i}/${j}/
+                done
+        done
+done 

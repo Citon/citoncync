@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# 2013 Citon Computer Corporation
+# Author: Paul Hirsch <paul.hirsch@citon.com>
+
+# citoncync-generic - Use RSync over SSH to replicate one or more source
+#                     directories to a remote backup server
+#
+# Usage: citoncync {replicate|showconfig|schedule}
+#
+# replicate - Perform the actual replication to the remote server
+# showconfig - Display the current settings and generate/display SSH public key
+# schedule - Add a cron entry to run "citoncync replicate" based on the
+#            SCHEDULE setting
+
+
+####### CONFIGURATION SECTION #######
+
+# !!! Customize this section to match your environment !!!
+# Pro Tips:
+# * Do not add a trailing / on any paths - These will be added as needed
+# * This script and the other files in this directory, including logs
+#   are also synced.  Check the .citoncync/ folder if you need to view
+#   logs or recover this script
+# * Monitor the progress of the script with "tail -f LOGFILE" where
+#   LOGFILE is the value defined below
+
+# Set the name of this script to report and use - Assumes you are copying
+# it to "citoncync"
+MYSCRIPT=citoncync
+
+
+# Define the absolute path to this folder
+# Example: /srv/data
+
+SCRIPTBASE=/srv/data/citoncync
+
+
+# Set the base path for source directories.  If you move your shares
+# to a new location on the source you can change this base without
+# having to repopulate the offsite copy.
+
+SOURCEBASE=/srv/data
+
+
+# An array of source directories under SOURCEBASE to copy.
+# Enclose any paths with spaces in quotes and separate items with a space.
+# YOU MUST CUSTOMIZE THIS!
+
+SOURCES=(Share Public)
+
+
+# External name of the RSync over SSH server to replicate to
+
+DESTHOST=target1.example.com
+
+
+# SSH port for specific target to use
+
+DESTPORT=22
+
+
+# User to connect as.  Should be CUSTOMERCODE-HOSTNAME.
+
+DESTUSER=widgets-testnas
+
+
+# The base path under the destination to write to. The default assumes
+# a chrooted home directory containing a "data" directory.
+# Do NOT leave a trailing / on this path!  It will be added.
+
+DESTBASE=/data
+
+
+# Standard crontab time entry to use to schedule this job.  See
+# "man 5 crontab" on most UNIX systems for details.  The example below
+# runs at 10 after 6PM every day of the week
+
+SCHEDULE='10 18 * * *'
+
+
+# RSync options.  Only modify if you have good reason!  Document your
+# options.
+# -a - Archive (sets recursive and other direct copy options)
+# --partial - Keep partial updates for faster resume after failure
+# --partial-dir=.part - Save in progress uploads to a temp directory
+# --delete-after - Remove files that are not present on the source AFTER
+#                  completing replication
+
+SYNCOPTS="-a --partial --partial-dir=.part --delete-after"
+
+
+# Log sync messages to a logfile.  This is rotated every time the job
+# runs to prevent filling the folder with noise
+
+LOGFILE=${SCRIPTBASE}/log/replication.log
+
+
+# Set the number of old logs to keep
+
+LOGKEEP=31
+
+
+# Set the crontab file to install into - There can be only one
+# instance of this script in the given crontab.
+
+CRONTAB=/var/spool/cron/crontabs/root
+
+
+# (optional) Set the command to run after modifying the crontab
+
+CRONRESTART="service cron restart"
+
+
+# Modify this if needed to include more to our PATH
+#PATH=${PATH}:OTHERSTUFF
+
+
+####### END CONFIGURATION SECTION ########
+
+# Pull in our common library
+. ${SCRIPTBASE}/citoncync-lib
+
+# MAIN
+case "$1" in
+    replicate)
+	do_replicate
+	;;
+
+    showconfig)
+	show_config
+	;;
+
+    schedule)
+	do_schedule
+	;;
+
+    *)
+	echo "${USAGE}"
+	;;
+esac
+
+exit 0
+
