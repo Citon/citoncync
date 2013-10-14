@@ -66,7 +66,7 @@ echo "Done updating ${SCRATCH}"
 
 
 # Cycle through valid customer folders
-for cust in `ls ${CHROOTHOMEBASE} | egrep '^[0-9a-zA-Z]'`; do
+for cust in `ls ${CHROOTHOMEBASE} | egrep '^[0-9a-zA-Z]' | grep -v citoncync-server`; do
         # Cycle through the per-device subfolders
         for i in `ls ${CHROOTHOMEBASE}/${cust} | egrep '^[0-9a-zA-Z]'`; do
                 echo "Processing ${i}"
@@ -92,4 +92,4 @@ for cust in `ls ${CHROOTHOMEBASE} | egrep '^[0-9a-zA-Z]'`; do
                         rsync -a --delete-after ${SCRATCH}/t${j}/ ${CHROOTHOMEBASE}/${cust}/${i}/${j}/
                 done
         done
-done 
+done

@@ -4,11 +4,9 @@
 # Examples:
 # # Skip .mp3 files
 # - *.mp3
-# - *.mpeg3
-#
 # # Skip ISOs, but do include ISOs starting with the name "archive"
 # + archive*.iso
 # - *.iso
 
-# The default is to include - So add "- *" at the end if you want this
-# list to be explicit
+# Do not replicate our lock file
+- .citoncync.pid
