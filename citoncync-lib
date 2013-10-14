@@ -3,16 +3,20 @@
 # 2013 Citon Computer Corporation
 # Author: Paul Hirsch <paul.hirsch@citon.com>
 
-# citoncync-lib - Common functions for client scripts
+# citoncync-lib - Common functions for client scripts.  This should
+#                 be called from a launch/config script named
+#                 citoncync that sets our config variables then
+#                 calls our main() function
 
 USAGE="
 $MYSCRIPT - Use RSync over SSH to replicate to offsite storage
 
 Usage:
 
- $MYSCRIPT {replicate|showconfig|schedule}
+ $MYSCRIPT {replicate|speedtest|showconfig|schedule}
 
 replicate - Sync to remote replication target
+speedtest - Run basic speedtest over SSH and print results
 showconfig - Show current configuration
 schedule - Install/update crontab entry
 
@@ -21,12 +25,25 @@ schedule - Install/update crontab entry
 # Our date function of choice - Spits out RFC3339 happy time
 DATESTAMP='date +%Y-%m-%dT%H:%M:%S%z'
 
+# The RSync filter file - Always under SCRIPTBASE/rsync-filter
+RSYNCFILTER="${SCRIPTBASE}/rsync-filter"
+
+# Set the size of our bandwidth test file in KB.  This is uploaded to the
+# far size to VERY roughly estimate bandwidth as set our rate limiting.
+# 1024KB (1MB) should take about 10 seconds on a slow broadband link. (512Kbps)
+# That should limit our impact on everything except dialup.  Sorry modem users.
+SPEEDTESTSIZE=1024
+
+# Set RATEKBPS to empty - We will not use it if it fails or if the speed
+# is too high to calculate using our sweet bandwidth tester
+RATEKBPS=""
+
 
 # Display the current configuration and creates/displays SSH public key
 show_config() {
     echo "* Current configuration for $0:"
     echo
-    for i in SCRIPTBASE SOURCEBASE DESTHOST DESTPORT DESTUSER DESTBASE SCHEDULE SYNCOPTS LOGFILE LOGKEEP CRONTAB CRONRESTART; do
+    for i in SCRIPTBASE SOURCEBASE DESTHOST DESTPORT DESTUSER DESTBASE SPEEDPERCENT SCHEDULE SYNCOPTS LOGFILE LOGKEEP CRONTAB CRONRESTART; do
 	# Sure it looks odd but this is how we display the vals without globbing
 	eval echo ${i} = \"\$$i\"
     done
@@ -105,10 +122,10 @@ do_schedule() {
 
 # Shift the logs up
 rotate_logs() {
-    for i in `seq ${LOGKEEP} 1`; do
+    for ((i=${LOGKEEP}; $i > 0; i=$i - 1)); do
 	j=$(( $i - 1 ))
 	if [ -f ${LOGFILE}.${j} ]; then
-	    mv -f ${LOFGILE}.${j} ${LOGFILE}.${i}
+	    mv -f ${LOGFILE}.${j} ${LOGFILE}.${i}
 	fi
     done
     if [ -f ${LOGFILE} ]; then
@@ -117,15 +134,42 @@ rotate_logs() {
 }
 
 
-# Locking - A necissary evil to prevent pile ups if replication takes too long
+# Very lame speed test.  Kinda quick but mostly filthy.  Pushes ${SPEEDTESTSIZE}
+# KB of data to the destination over SSH with compression disabled.  Using
+# time on the destination side (so we ignore SSH setup time), we calculate
+# the rough bandwidth then set RATEKBPS to be RATEAVERAGE percent of the
+# measured speed, in KBps
+do_ratecalc() {
+    # One pipeline to rule them - This uses /dev/zero as a source for
+    # data then pipes it into ssh with compression off (so our strings of 0s
+    # take full size on the line). On the destination side we time only the
+    # dumping of data into our temp/test file.  The return from time then is
+    # run through sed to collect milliseconds.  (Bash time returns ms...)
+    MSECS=$( dd if=/dev/zero bs=1024 count=${SPEEDTESTSIZE} 2>/dev/null | \
+	ssh -o Compression=no -i"${SCRIPTBASE}/${DESTUSER}_id_rsa" \
+	-p ${DESTPORT} ${DESTUSER}@${DESTHOST} \
+	"time cat > ${DESTBASE}/.citoncync-bwtest; rm ${DESTBASE}/.citoncync-bwtest" 2>&1 | \
+	grep real | sed 's/^real.\+[0-9]\+m\([0-9]\+\)\.\([0-9]\+\).*$/\1\2/' | \
+	sed 's/^0\+//' )
+
+    # Now calculate our Bps rate - We want a big number so bash's integer math
+    # doesn't beat all the precision out of it.
+    BPS=$(( (${SPEEDTESTSIZE} * 1024 * 1000) / ${MSECS} ))
+
+    # And finally, our KBps rate to set based on the percentage of BPS we want
+    RATEKBPS=$(( (${SPEEDPERCENT} * ${BPS}) / 102400 ))
+}
+
+
+# Locking - A necessary evil to prevent pile ups if replication takes too long
 # Uses the semi-reliable noclobber method (see
 # http://stackoverflow.com/a/4936722/383002)  Since replicate should not be
 # called in a tight loop it should be good enough for our purposes.
 popnlock() {
-    if (set -o noclobber; echo "$$" > "${SCRIPTBASE}/.${MYNAME}.pid") 2> /dev/null; then
-	trap 'rm -f "${SCRIPTBASE}/.${MYNAME}.pid"; exit $?' INT TERM EXIT
+    if (set -o noclobber; echo "$$" > "${SCRIPTBASE}/.${MYSCRIPT}.pid") 2> /dev/null; then
+	trap 'rm -f "${SCRIPTBASE}/.${MYSCRIPT}.pid"; exit $?' INT TERM EXIT
     else
-	echo `${DATESTAMP}` "Previous instance running - .${MYNAME}.pid with live pid. Exiting." >> ${LOGFILE}
+	echo `${DATESTAMP}` "Previous instance running - .${MYSCRIPT}.pid with live pid. Exiting." >> ${LOGFILE}
 	exit 1
     fi
 }
@@ -133,7 +177,7 @@ popnlock() {
 
 # Unlock
 popunlock() {
-    rm -f "${SCRIPTBASE}/.${MYNAME}.pid"
+    rm -f "${SCRIPTBASE}/.${MYSCRIPT}.pid"
     trap - INT TERM EXIT
 }
 
@@ -146,21 +190,73 @@ do_replicate() {
     rotate_logs
     echo `${DATESTAMP}` "Starting replication to ${DESTUSER}@${DESTHOST}:${DESTBASE}" > ${LOGFILE}
 
+    # <SARCASM>Run the world's most awesome bandwidth test!</SARCASM>
+    do_ratecalc
+
+    # If we have a average rate limit calculated, add it
+    if [ X${RATEKBPS} != "X" ]; then
+	echo `${DATESTAMP}` "Setting upload rate to $(( ${RATEKBPS} * 8 ))Kbps  (${SPEEDPERCENT}% of measured)" >> ${LOGFILE}
+	SYNCOPTS="${SYNCOPTS} --bwlimit=${RATEKBPS}"
+    else
+	echo `${DATESTAMP}` "Unable to estimate bandwidth.  Rate average not set." >> ${LOGFILE}
+    fi
+
+    # Cycle through sources and replicate them
     for source in ${SOURCES[@]}; do	
-	echo `${DATESTAMP}` "Replicating ${SOURCEBASE}/${source} to ${DESTBASE}/${source}" >> ${LOGFILE}
+	echo `${DATESTAMP}` "Replicating ${SOURCEBASE}/${source} to ${DESTHOST}:${DESTBASE}/${source}" >> ${LOGFILE}
 
 	# Now for the MAGIC!  The whole reason for all this.  Replication.
-	rsync ${SYNCOPTS} -e "ssh -i${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
+	# The --stats flag is added so we get detailed transfer stats for
+	# data.  It is left out for the metadata/script transfer.
+	rsync ${SYNCOPTS} --stats -e "ssh -i ${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
+	    --filter=". ${SCRIPTBASE}/rsync-filter" \
 	    ${SOURCEBASE}/${source} ${DESTHOST}:${DESTBASE}/ >> ${LOGFILE} 2>&1
     done
 
     echo `${DATESTAMP}` "End data replication" >> ${LOGFILE}
 
     # Now we sync the SCRIPTBASE directory, including logs, to .citoncync/
-    rsync ${SYNCOPTS} -e "ssh -i${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
-	    ${SCRIPTBASE}/ ${DESTHOST}:${DESTBASE}/.citoncync/ >> ${LOGFILE} 2>&1
+    rsync ${SYNCOPTS} -e "ssh -i ${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
+	--filter=". ${SCRIPTBASE}/rsync-filter" \
+	${SCRIPTBASE}/ ${DESTHOST}:${DESTBASE}/.citoncync/ >> ${LOGFILE} 2>&1
+
     echo `${DATESTAMP}` "End metadata and script replication" >> ${LOGFILE}
 
     # Clear the lock
     popunlock
 }
+
+
+# Run it!
+main() {
+    case "$1" in
+	replicate)
+	    do_replicate
+	    ;;
+	
+	speedtest)
+	    do_ratecalc
+	    echo "Upload speed test results for destination  ${DESTHOST}"
+	    echo
+	    echo "Measured Upload Speed:" $(( (8 * ${BPS}) / 1024 ))Kbps
+	    echo "Speed Percent Setting : ${SPEEDPERCENT}%"
+	    echo "Calculated Rate Limit for Replication:" $(( 8 * ${RATEKBPS} ))Kbps
+	    echo
+	    ;;
+	
+	showconfig)
+	    show_config
+	    ;;
+	
+	schedule)
+	    do_schedule
+	    ;;
+	
+	*)
+	    echo "${USAGE}"
+	    ;;
+    esac
+    
+    exit 0
+}
+

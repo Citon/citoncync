@@ -3,15 +3,8 @@
 # 2013 Citon Computer Corporation
 # Author: Paul Hirsch <paul.hirsch@citon.com>
 
-# citoncync-generic - Use RSync over SSH to replicate one or more source
-#                     directories to a remote backup server
-#
-# Usage: citoncync {replicate|showconfig|schedule}
-#
-# replicate - Perform the actual replication to the remote server
-# showconfig - Display the current settings and generate/display SSH public key
-# schedule - Add a cron entry to run "citoncync replicate" based on the
-#            SCHEDULE setting
+# citoncync-generic - Wrapper config script for citoncync-lib.
+#                     See citoncync-lib for usage.
 
 
 ####### CONFIGURATION SECTION #######
@@ -72,6 +65,14 @@ DESTUSER=widgets-testnas
 DESTBASE=/data
 
 
+# citoncync uses a very rudimentary bandwidth test over SSH before running
+# the sync to guestimate the bandwidth available from source to destination.
+# Set the percentage (as a whole integer) of bandwidth to use.  The default
+# of 50 should be appropriate for most networks.  Note that RSync does not
+# precisely cap transfers, it just tries to average the speed.
+SPEEDPERCENT=50
+
+
 # Standard crontab time entry to use to schedule this job.  See
 # "man 5 crontab" on most UNIX systems for details.  The example below
 # runs at 10 after 6PM every day of the week
@@ -121,24 +122,5 @@ CRONRESTART="service cron restart"
 # Pull in our common library
 . ${SCRIPTBASE}/citoncync-lib
 
-# MAIN
-case "$1" in
-    replicate)
-	do_replicate
-	;;
-
-    showconfig)
-	show_config
-	;;
-
-    schedule)
-	do_schedule
-	;;
-
-    *)
-	echo "${USAGE}"
-	;;
-esac
-
-exit 0
-
+# Call main() from citoncync-lib.  It does not return.
+main $1

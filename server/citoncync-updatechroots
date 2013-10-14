@@ -15,9 +15,7 @@ CHROOTHOMEBASE=/mnt/z1
 SCRATCH=/mnt/z1/citoncync-server/chrootskel
 
 # Binaries we need to include and pull libs for
-RSYNCBIN=/usr/local/bin/rsync
-BASHBIN=/bin/bash
-LSBIN=/bin/ls
+BINS="/usr/local/bin/rsync /bin/bash /bin/ls /bin/cat /bin/rm"
 LDELF=/libexec/ld-elf.so.1
 
 # Sanity check on the chrootskel dir
@@ -42,14 +40,18 @@ done
 
 # Copy binaries and criticals
 echo "Populating binaries..."
-cp -p ${RSYNCBIN} ${SCRATCH}/tbin/
-cp -p ${BASHBIN} ${SCRATCH}/tbin/sh
-cp -p ${LSBIN} ${SCRATCH}/tbin/
+for i in ${BINS}; do
+    cp -p ${i} ${SCRATCH}/tbin/
+done
+
+# Special - Make sh into bash
+cp -p ${SCRATCH}/tbin/bash ${SCRATCH}/tbin/sh
+# And our libexec
 cp -p ${LDELF} ${SCRATCH}/tlibexec/
 
 # Copy required libraries
 echo "Populating libraries..."
-for i in ${RSYNCBIN} ${BASHBIN} ${LSBIN}; do
+for i in ${BINS}; do
         for j in `ldd -f "%p\n" ${i}`; do
                 cp -p ${j} ${SCRATCH}/tlib
         done
