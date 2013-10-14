@@ -122,12 +122,28 @@ do_schedule() {
 
 # Shift the logs up
 rotate_logs() {
+    # Try to extract the log parent diectory name
+    LOGBASE=`echo ${LOGFILE} | sed 's/\/[^\/]\+$//'`
+
+    # If there IS a subdirectory and it does not exist...
+    if [ X${LOGFILE} != X${LOGBASE} -a ! -d ${LOGBASE} ]; then 
+	if [ X${LOGBASE} = X${SCRIPTBASE}/log ]; then
+	    mkdir -p ${LOGBASE}
+	else
+	    echo "FATAL: No place to put ${LOGFILE} - Missing ${LOGBASE}!"
+	    exit 1
+	fi
+    fi
+    
+    # Cycle through old logs and bump them up
     for ((i=${LOGKEEP}; $i > 0; i=$i - 1)); do
 	j=$(( $i - 1 ))
 	if [ -f ${LOGFILE}.${j} ]; then
 	    mv -f ${LOGFILE}.${j} ${LOGFILE}.${i}
 	fi
     done
+
+    # Backup the last log to .0
     if [ -f ${LOGFILE} ]; then
 	mv -f ${LOGFILE} ${LOGFILE}.0
     fi
@@ -151,13 +167,18 @@ do_ratecalc() {
 	"time cat > ${DESTBASE}/.citoncync-bwtest; rm ${DESTBASE}/.citoncync-bwtest" 2>&1 | \
 	grep real | sed 's/^real.\+[0-9]\+m\([0-9]\+\)\.\([0-9]\+\).*$/\1\2/' | \
 	sed 's/^0\+//' )
-
-    # Now calculate our Bps rate - We want a big number so bash's integer math
-    # doesn't beat all the precision out of it.
-    BPS=$(( (${SPEEDTESTSIZE} * 1024 * 1000) / ${MSECS} ))
-
-    # And finally, our KBps rate to set based on the percentage of BPS we want
-    RATEKBPS=$(( (${SPEEDPERCENT} * ${BPS}) / 102400 ))
+    if [ X$MSECS = "X" ]; then
+	# Something went wrong - Bail
+	echo "WARNING: Speedtest failed - Run the following to diagnose:"
+	echo " 	ssh -o Compression=no -i\"${SCRIPTBASE}/${DESTUSER}_id_rsa\" -p ${DESTPORT} ${DESTUSER}@${DESTHOST} \"time cat > ${DESTBASE}/.citoncync-bwtest; rm ${DESTBASE}/.citoncync-bwtest\""
+    else
+        # Now calculate our Bps rate - We want a big number so bash's integer math
+        # doesn't beat all the precision out of it.
+	BPS=$(( (${SPEEDTESTSIZE} * 1024 * 1000) / ${MSECS} ))
+	
+        # And finally, our KBps rate to set based on the percentage of BPS we want
+	RATEKBPS=$(( (${SPEEDPERCENT} * ${BPS}) / 102400 ))
+    fi
 }
 
 
