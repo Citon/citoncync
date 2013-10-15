@@ -39,6 +39,15 @@ SPEEDTESTSIZE=1024
 RATEKBPS=""
 
 
+# The time to wait in seconds between retries
+HOLDTIME=60
+
+
+# Set an upper limit on retries per replication per run.  It is good to be
+# robust but not futile.  Remember that we wait HOLDTIME seconds between retries.
+MAXRETRIES=60
+
+
 # Display the current configuration and creates/displays SSH public key
 show_config() {
     echo "* Current configuration for $0:"
@@ -164,7 +173,7 @@ do_ratecalc() {
     MSECS=$( dd if=/dev/zero bs=1024 count=${SPEEDTESTSIZE} 2>/dev/null | \
 	ssh -o Compression=no -i"${SCRIPTBASE}/${DESTUSER}_id_rsa" \
 	-p ${DESTPORT} ${DESTUSER}@${DESTHOST} \
-	"time cat > ${DESTBASE}/.citoncync-bwtest; rm ${DESTBASE}/.citoncync-bwtest" 2>&1 | \
+	"time cat > ${DESTBASE}/.citoncync-bwtest; echo '' > ${DESTBASE}/.citoncync-bwtest" 2>&1 | \
 	grep real | sed 's/^real.\+[0-9]\+m\([0-9]\+\)\.\([0-9]\+\).*$/\1\2/' | \
 	sed 's/^0\+//' )
     if [ X$MSECS = "X" ]; then
@@ -226,12 +235,8 @@ do_replicate() {
     for source in ${SOURCES[@]}; do	
 	echo `${DATESTAMP}` "Replicating ${SOURCEBASE}/${source} to ${DESTHOST}:${DESTBASE}/${source}" >> ${LOGFILE}
 
-	# Now for the MAGIC!  The whole reason for all this.  Replication.
-	# The --stats flag is added so we get detailed transfer stats for
-	# data.  It is left out for the metadata/script transfer.
-	rsync ${SYNCOPTS} --stats -e "ssh -i ${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
-	    --filter=". ${SCRIPTBASE}/rsync-filter" \
-	    ${SOURCEBASE}/${source} ${DESTHOST}:${DESTBASE}/ >> ${LOGFILE} 2>&1
+	# Sync it (using a semi-reliable retry system)
+	do_rsync ${source}
     done
 
     echo `${DATESTAMP}` "End data replication" >> ${LOGFILE}
@@ -245,6 +250,48 @@ do_replicate() {
 
     # Clear the lock
     popunlock
+}
+
+
+# Now for the MAGIC!  The whole reason for all this.  Replication.
+# The --stats flag is added so we get detailed transfer stats for
+# data.  It is left out for the metadata/script transfer.
+do_rsync() {
+    SRC=${1}
+    RCODE=255
+    RTRY=0
+
+    while [ X${RCODE} != "X0" -a X${RTRY} != X${MAXRETRIES} ]; do
+	RTRY=$(( ${RTRY} + 1 ))
+	
+	rsync ${SYNCOPTS} --stats -e "ssh -i ${SCRIPTBASE}/${DESTUSER}_id_rsa -p ${DESTPORT} -l ${DESTUSER}" \
+	    --filter=". ${SCRIPTBASE}/rsync-filter" \
+	    ${SOURCEBASE}/${SRC} ${DESTHOST}:${DESTBASE}/ >> ${LOGFILE} 2>&1
+
+	RCODE=$?
+
+	if [ X$RCODE = "X0" ]; then
+	    # It actually completed cleanly - Go figure!
+	    echo `${DATESTAMP}` "Replication of ${SRC} completed normally" >> ${LOGFILE}
+	elif echo $? | egrep '^(10|11|12|23|24|30)$'; then
+            # Exited with one of the codes we want to retry on.  They are:
+            #       10     Error in socket I/O
+            #       11     Error in file I/O
+            #       12     Error in rsync protocol data stream
+            #       23     Partial transfer due to error
+            #       24     Partial transfer due to vanished source files
+            #       30     Timeout in data send/receive
+	    echo `${DATESTAMP}` "(Attempt ${RTRY}) Replication of ${SRC} terminated early with code ${RCODE} - Will retry after ${HOLDTIME} seconds." >> ${LOGFILE}
+	    sleep ${HOLDTIME}
+
+	else
+	    # Bad exit code.  Bad.
+	    echo `${DATESTAMP}` "(Attempt ${RTRY}) Replication of ${SRC} terminated early with code ${RCODE} - Not a retryable error.  Aborting"
+	    
+	    # Break out.
+	    RCODE=0
+	fi
+    done
 }
 
 

@@ -81,14 +81,17 @@ SCHEDULE='10 18 * * *'
 
 
 # RSync options.  Only modify if you have good reason!  Document your
-# options.
+# options.  Here are some common ones:
 # -a - Archive (sets recursive and other direct copy options)
 # --partial - Keep partial updates for faster resume after failure
 # --partial-dir=.part - Save in progress uploads to a temp directory
 # --delete-after - Remove files that are not present on the source AFTER
 #                  completing replication
+# -z - Use compression (defaults to level 6 which is a high-CPU option for
+#      slow networks)
+# --compress-level=1 - Change to lighter compression (for faster networks)
 
-SYNCOPTS="-a --partial --partial-dir=.part --delete-after"
+SYNCOPTS="-a --partial --partial-dir=.part --delete-after -z"
 
 
 # Log sync messages to a logfile.  This is rotated every time the job
