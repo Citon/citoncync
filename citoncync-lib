@@ -111,7 +111,7 @@ do_schedule() {
 	echo "${CRONTEXT}" > ${CRONTAB}
 
         # Append out scheduling line
-        echo "${SCHEDULE} ${SCRIPTBASE}/${MYSCRIPT}" >> ${CRONTAB}
+        echo "${SCHEDULE} ${SCRIPTBASE}/${MYSCRIPT} replicate" >> ${CRONTAB}
 
         # Show the tab
         echo "Your current ${CRONTAB} is now:"
