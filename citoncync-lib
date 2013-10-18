@@ -44,7 +44,7 @@ HOLDTIME=60
 
 
 # Set an upper limit on retries per replication per run.  It is good to be
-# robust but not futile.  Remember that we wait HOLDTIME seconds between retries.
+# robust but not futile. Remember we wait HOLDTIME seconds between retries.
 MAXRETRIES=60
 
 
@@ -95,11 +95,11 @@ show_keypair() {
 # Install our custom crontab entry and create (if needed) then display
 # our public SSH key
 do_schedule() {
-    if [ X${CRONTAB} = "X" ]; then
+    if [ "X${CRONTAB}" = "X" ]; then
 	echo "CRONTAB not set - Skipping scheduling"
     else
 	echo "* Adding/replacing our crontab entry"
-	if [ ! -f ${CRONTAB} ]; then
+	if [ ! -f "${CRONTAB}" ]; then
 	    echo "FATAL: Can not find CRONTAB file ${CRONTAB}"
 	    exit 1
 	fi
@@ -121,9 +121,9 @@ do_schedule() {
 	echo
 
 	# Restart cron if a command is defined
-	if [ X${CRONRESTART} != "X" ]; then
+	if [ "X${CRONRESTART}" != "X" ]; then
 	    echo "Attempting to reload crontab"
-	    `${CRONRESTART}`
+	    eval ${CRONRESTART}
 	fi
     fi
 }

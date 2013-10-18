@@ -113,7 +113,7 @@ CRONTAB=/etc/config/crontab
 
 # (optional) Set the command to run after modifying the crontab
 
-CRONRESTART="/etc/init.d/crond.sh restart"
+CRONRESTART="crontab ${CRONTAB}; /etc/init.d/crond.sh restart"
 
 
 # Modify this if needed to include more to our PATH
