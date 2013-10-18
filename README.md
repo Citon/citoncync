@@ -163,9 +163,10 @@ CRONRESTART - The command to use to reload the crontab.  If left blank nothing
    into the authorized_keys list for your client machine's account on the
    server side.  (In FreeNAS this is in the "Modify" option for the account)
 
- * If you want only certain files to be replicated, add rules to the
-   "rsync-filter" file.  See the rsync man page for details.  The default
-   filter file does not apply any filtering.
+ * Copy "rsync-filter.example" to "rsync-filter".  If you want only certain
+   files or folders to be replicated you need to modify rsync-filter.
+   See the rsync man page for details.  The default filter file does not
+   apply any filtering.
 
  * (Optional) Run our speedtest to see what citoncync will be using as
    its average bandwidth rate limit.  The speedtest runs each time replication
