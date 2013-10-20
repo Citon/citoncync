@@ -173,13 +173,13 @@ do_ratecalc() {
     MSECS=$( dd if=/dev/zero bs=1024 count=${SPEEDTESTSIZE} 2>/dev/null | \
 	ssh -o Compression=no -i"${SCRIPTBASE}/${DESTUSER}_id_rsa" \
 	-p ${DESTPORT} ${DESTUSER}@${DESTHOST} \
-	"time cat > ${DESTBASE}/.citoncync-bwtest; echo '' > ${DESTBASE}/.citoncync-bwtest" 2>&1 | \
+	"time cat > ${DESTBASE}/.citoncync-bwtest.tmp; echo '' > ${DESTBASE}/.citoncync-bwtest.tmp" 2>&1 | \
 	grep real | sed 's/^real.\+[0-9]\+m\([0-9]\+\)\.\([0-9]\+\).*$/\1\2/' | \
 	sed 's/^0\+//' )
     if [ X$MSECS = "X" ]; then
 	# Something went wrong - Bail
 	echo "WARNING: Speedtest failed - Run the following to diagnose:"
-	echo " 	ssh -o Compression=no -i\"${SCRIPTBASE}/${DESTUSER}_id_rsa\" -p ${DESTPORT} ${DESTUSER}@${DESTHOST} \"time cat > ${DESTBASE}/.citoncync-bwtest; rm ${DESTBASE}/.citoncync-bwtest\""
+	echo " 	ssh -o Compression=no -i\"${SCRIPTBASE}/${DESTUSER}_id_rsa\" -p ${DESTPORT} ${DESTUSER}@${DESTHOST} \"time cat > ${DESTBASE}/.citoncync-bwtest.tmp; rm ${DESTBASE}/.citoncync-bwtest.tmp\""
     else
         # Now calculate our Bps rate - We want a big number so bash's integer math
         # doesn't beat all the precision out of it.
