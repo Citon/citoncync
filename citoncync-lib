@@ -52,7 +52,7 @@ MAXRETRIES=60
 show_config() {
     echo "* Current configuration for $0:"
     echo
-    for i in SCRIPTBASE SOURCEBASE DESTHOST DESTPORT DESTUSER DESTBASE SPEEDPERCENT SCHEDULE SYNCOPTS LOGFILE LOGKEEP CRONTAB CRONRESTART; do
+    for i in SCRIPTBASE SOURCEBASE DESTHOST DESTPORT DESTUSER DESTBASE SPEEDPERCENT SCHEDULE SYNCOPTS LOGFILE LOGKEEP CRONTAB CRONUSER CRONRESTART; do
 	# Sure it looks odd but this is how we display the vals without globbing
 	eval echo ${i} = \"\$$i\"
     done
@@ -111,7 +111,7 @@ do_schedule() {
 	echo "${CRONTEXT}" > ${CRONTAB}
 
         # Append out scheduling line
-        echo "${SCHEDULE} ${SCRIPTBASE}/${MYSCRIPT} replicate" >> ${CRONTAB}
+        echo "${SCHEDULE} ${CRONUSER} ${SCRIPTBASE}/${MYSCRIPT} replicate" >> ${CRONTAB}
 
         # Show the tab
         echo "Your current ${CRONTAB} is now:"

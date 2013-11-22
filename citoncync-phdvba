@@ -3,8 +3,8 @@
 # 2013 Citon Computer Corporation
 # Author: Paul Hirsch <paul.hirsch@citon.com>
 
-# citoncync-qnap    - Wrapper config script for citoncync-lib.
-#                     See citoncync-lib for usage.
+# citoncync-phdvba    - Wrapper config script for citoncync-lib.
+#                       See citoncync-lib for usage.
 
 
 ####### CONFIGURATION SECTION #######
@@ -26,21 +26,21 @@ MYSCRIPT=citoncync
 # Define the absolute path to this folder
 # Example: /srv/data
 
-SCRIPTBASE=/share/MD0_DATA/citoncync
+SCRIPTBASE=/dd/citoncync
 
 
 # Set the base path for source directories.  If you move your shares
 # to a new location on the source you can change this base without
 # having to repopulate the offsite copy.
 
-SOURCEBASE=/share/MD0_DATA
+SOURCEBASE=/dd
 
 
 # An array of source directories under SOURCEBASE to copy.
 # Enclose any paths with spaces in quotes and separate items with a space.
 # YOU MUST CUSTOMIZE THIS!
 
-SOURCES=(Share Public)
+SOURCES=(backups blocks phdvbstore.ini)
 
 
 # External name of the RSync over SSH server to replicate to
@@ -87,11 +87,9 @@ SCHEDULE='10 18 * * *'
 # --partial-dir=.part - Save in progress uploads to a temp directory
 # --delete-after - Remove files that are not present on the source AFTER
 #                  completing replication
-# -z - Use compression (defaults to level 6 which is a high-CPU option for
-#      slow networks)
-# --compress-level=1 - Change to lighter compression (for faster networks)
+# -z - Use compression - This is OFF for PHD since the data is compressed
 
-SYNCOPTS="-a --partial --partial-dir=.part --delete-after -z"
+SYNCOPTS="-a --partial --partial-dir=.part --delete-after"
 
 
 # Log sync messages to a logfile.  This is rotated every time the job
@@ -108,17 +106,17 @@ LOGKEEP=31
 # Set the crontab file to install into - There can be only one
 # instance of this script in the given crontab.
 
-CRONTAB=/etc/config/crontab
+CRONTAB=/etc/cron.d/citoncync
 
 
 # If you are adding to a special multiuser cron file, specify a user
 # to run as.  Else, leave CRONUSER set to ""
-CRONUSER=""
+CRONUSER="root"
 
 
 # (optional) Set the command to run after modifying the crontab
 
-CRONRESTART="crontab ${CRONTAB}; /etc/init.d/crond.sh restart"
+#CRONRESTART="crontab ${CRONTAB}; /etc/init.d/crond.sh restart"
 
 
 # Modify this if needed to include more to our PATH

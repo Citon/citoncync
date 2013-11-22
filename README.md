@@ -22,6 +22,7 @@ The following client scripts are provided:
 
  * citoncync-generic - Client script template for generic UNIX/Linux
  * citoncync-qnap - Client script template with QNAP targeted defaults
+ * citoncync-phdvba - Client script template with PHD Virtual VBA defaults
 
 For installation, copy either "citoncync-generic" or "citoncync-qnap" to
 a new file named "citoncync" and modify the new file to match your
@@ -141,13 +142,20 @@ LOGKEEP - The number of previous logs to keep.
 CRONTAB - The crontab file to add our schedule line to.  If left blank you
           will need to manually schedule the job.
 
-          Example: /var/spool/cron/crontabs/root
+          Example: CRONTAB=/var/spool/cron/crontabs/root
+
+
+CRONUSER - The user to run under for a shared crontab.  (/etc/crontab and
+           files under /etc/cron.d on Debian based systems, for instance.)
+           Leave set to "" unless you need to specify the user.
+
+	   Example: CRONUSER="root"
 
 
 CRONRESTART - The command to use to reload the crontab.  If left blank nothing
               will be run after updating the crontab.
 
-	      Example: service cron restart
+	      Example: CRONRESTART="service cron restart"
 
 
  * From a shell on the client, enter the citoncync folder

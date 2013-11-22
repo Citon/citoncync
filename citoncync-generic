@@ -111,6 +111,11 @@ LOGKEEP=31
 CRONTAB=/var/spool/cron/crontabs/root
 
 
+# If you are adding to a special multiuser cron file, specify a user
+# to run as.  Else, leave CRONUSER set to ""
+CRONUSER=""
+
+
 # (optional) Set the command to run after modifying the crontab
 
 CRONRESTART="service cron restart"
