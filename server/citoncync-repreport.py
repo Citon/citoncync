@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/local/bin/python
 
 # Copyright 2013, Citon Computer Corporation
 # Author: Paul Hirsch
@@ -10,7 +10,7 @@
 
 ## Imports
 # General
-import sys, os, errno, traceback, time, re, datetime, platform
+import sys, os, stat, errno, traceback, time, re, datetime, platform
 
 # Configuration
 import ConfigParser     # XXX - Change this to "configparser" for Python 3
@@ -18,7 +18,6 @@ import optparse
 
 # Reporting to console and via email with optional CSV output
 import smtplib, email, logging, logging.handlers, csv
-
 
 # Defaults
 CONFFILE = "/etc/citoncync-repreport.conf"  # Default config file for repreport
@@ -30,22 +29,21 @@ TIMEFORMAT = "%Y-%m-%d %H:%M:%S"
 COLNAMES = {
     'customer': 'Customer',
     'hostname': 'Hostname',
-    'alloc': 'Allocation',
-    'used': 'Used Space',
-    'free': 'Free Space',
+    'alloc': 'Allocated Bytes',
+    'free': 'Free Bytes',
     'freepercent': 'Free %',
+    'hostused': 'Host Used Bytes',
     'laststart': 'Last Start',
     'lastcomplete': 'Last Complete',
     'lastratelimit': 'Last Rate Limit',
-    'lastratepercent': 'Last Rate %'
+    'lastratepercent': 'Last Rate %',
+    'alerts': 'Alert Flags'
 }
 
 
 # Handy lambda to pretty print file sizes - From Anonymous post to
 # http://www.5dollarwhitebox.org/drupal/node/84
-humansize = lambda s:[(s%1024**i and "%.1f"%(s/1024.0**i) or str(s/1024**i))
-                      + x.strip() for i,x in enumerate(' KMGTPEZY') if s<1024**(i+1) or i==8][0]
-
+humansize = lambda s:[(s%1024**i and "%.1f"%(s/1024.0**i) or str(s/1024**i))+x.strip() for i,x in enumerate(' KMGTPEZY') if s<1024**(i+1) or i==8][0]
 
 
 def listCustomers (basepath,dirmatch,ignorecusts):
@@ -56,12 +54,13 @@ def listCustomers (basepath,dirmatch,ignorecusts):
     """
 
     customers = []
+    pat = re.compile(r'^%s$' % dirmatch)
 
     for cust in os.listdir(basepath):
-        m = re.match(dirmatch, cust)
+        m = pat.search(cust)
         if m:
             if ignorecusts.count(cust) == 0:
-                customers.append
+                customers.append(cust)
     
     return customers
 
@@ -73,10 +72,10 @@ def listCustomerHosts (basepath,customer,dirmatch):
     """
 
     hostdirs = []
+    pat = re.compile(r'^%s$' % dirmatch)
 
     for hostn in os.listdir(os.path.join(basepath, customer)):
-        m = re.match(dirmatch, hostn)
-
+        m = pat.search(hostn)
         if m:
             hostdirs.append(hostn)
 
@@ -97,11 +96,83 @@ def getFreeSpace(folder):
     return os.statvfs(folder).f_bfree * os.statvfs(folder).f_frsize
 
 
-def getHostUsedSpace(folder):
+def getUsedSpace(folder):
     """
-    Return the number of bytes used under a specific host folder
+    Return the number of bytes used by files under a specific folder.  Uses
+    a hacked version of the os.walk code that tracks file sizes on the way
+    to avoid multiple stat calls.
     """
-    # TBC
+    s = 0
+    for root, dirs, files, sizes in walksize(folder):
+        s += sizes
+
+    return s
+
+
+def walksize(top):
+    """
+    This is a direct copy of os.walk from Python2.6 with modifications
+    to create a file size summary as it walks.  topdown, onerror,
+    and followlinks are all negated.
+
+    For each directory in the directory tree rooted at top (including top
+    itself, but excluding '.' and '..'), yields a 4-tuple
+
+        dirpath, dirnames, filenames, filesizes
+
+    dirpath is a string, the path to the directory.  dirnames is a list of
+    the names of the subdirectories in dirpath (excluding '.' and '..'),
+    filenames is a list of the names of the non-directory files in dirpath,
+    and filesizes is a total size in bytes of said files.
+
+    Topdown processing is the only direction for walksize.
+    Errors from the os.listdir() call are ignored.
+    walksize does not follow symbolic links.
+
+    # Example from os.walk modified to use "walksize"
+    for root, dirs, files, sizes in walksize('python/Lib/email'):
+        print root, "consumes",
+        print sizes,
+        print "bytes in", len(files), "non-directory files"
+        if 'CVS' in dirs:
+            dirs.remove('CVS')  # don't visit CVS directories
+    """
+
+    # We may not have read permission for top, in which case we can't
+    # get a list of the files the directory contains.  os.path.walk
+    # always suppressed the exception then, rather than blow up for a
+    # minor reason when (say) a thousand readable directories are still
+    # left to visit.  That logic is copied here.
+    try:
+        names = os.listdir(top)
+    
+    except os.error, err:
+        return
+
+    dirs, nondirs = [], []
+    sizes = 0
+
+    for name in names:
+        try:
+            # Try to stat the file - One time only
+            s = os.stat(os.path.join(top, name))
+        except os.error, err:
+            continue
+        
+        if stat.S_ISDIR(s.st_mode):
+            dirs.append(name)
+        else:
+            nondirs.append(name)
+            # And bump the size!
+            sizes += s.st_size
+
+    yield top, dirs, nondirs, sizes
+    
+    for name in dirs:
+        path = os.path.join(top, name)
+        if not os.path.islink(path):
+            for x in walksize(path):
+                yield x
 
 
 def getLastChange(folder, subfile):
@@ -129,7 +200,7 @@ def getLastRate(folder, lastlogfile):
     cfile = os.path.join(folder, lastlogfile)
 
     if not os.path.isfile(cfile):
-        return False
+        return ('0', '0')
 
     try:
         lfh = open(cfile, 'r')
@@ -141,7 +212,7 @@ def getLastRate(folder, lastlogfile):
     m = re.findall(RATEREGEX, lfh.read())
 
     if len(m):
-        return m[0]
+        return (m[0].group(), m[1].group())
     else:
         return ('0', '0')
 
@@ -182,8 +253,9 @@ class Configure(ConfigParser.ConfigParser):
         #  Great example of merged ConfigParser/argparse:
         #  http://blog.vwelch.com/2011/04/combining-configparser-and-argparse.html
         progname = os.path.basename(__file__)
-        parser = optparse.OptionParser(usage="%s [-c FILE] [-mwvd]" % progname)
+        parser = optparse.OptionParser(usage="%s [-c FILE] [-fmwvd]" % progname)
         parser.add_option("-c", "--config", dest="conffile", help="use configuration from FILE", metavar="FILE")
+        parser.add_option("-f", "--fast", dest="faston", action="store_true", default=False, help="skip per-host usage and other slow stats")
         parser.add_option("-m", "--mail", dest="emailon", action="store_true", default=False, help="send email report")
         parser.add_option("-w", "--warn", dest="warnonly", action="store_true", default=False, help="only report when there are hosts with low space or past due replication warnings")
         parser.add_option("-v", "--csv", dest="csvon", action="store_true", default=False, help="output CSV report")
@@ -215,7 +287,7 @@ class Configure(ConfigParser.ConfigParser):
         # at this time.  It will be stored in the settings hash
 
         # Check for required settings under the [conf] section
-        req = ['instancename', 'basepath', 'ignorecusts', 'dirmatch', 'bwtestfile', 'lastlogfile'] 
+        req = ['instancename', 'basepath', 'ignorecusts', 'dirmatch', 'bwtestfile', 'lastlogfile', 'alertfreepercent', 'alertfreegb'] 
         errs = ""
         for item in req:
             if not self.has_option('conf', item):
@@ -232,9 +304,18 @@ class Configure(ConfigParser.ConfigParser):
 
         # Pull in remaining CLI args
         settings['emailon'] = options.emailon
+        settings['faston'] = options.faston
         settings['warnonly'] = options.warnonly
         settings['debugon'] = options.debugon
         settings['csvon'] = options.csvon
+
+        # Set other items based on the fast flag
+        if settings['faston']:
+            # The per-host usage calc requires checking every file in the host
+            # folders.  This is IO intensive, especially for a large file count.
+            # Note that the per-customer stats are still accurate as long
+            # as each is under thier own logical FS or ZFS folder
+            settings['skiphostused'] = 1
 
         # Set our loglevel based on the warnonly and debug flags
         if settings['debugon']:
@@ -366,7 +447,6 @@ class EmailReportHandler(logging.Handler):
 
 
 
-
 def main ():
 
     # Report time
@@ -406,17 +486,24 @@ def main ():
     # Cycle through customer/hostname directories
     logger.debug("Starting processing under %s" % sets['basepath'])
     for c in listCustomers(sets['basepath'], sets['dirmatch'], sets['ignorecusts']):
-        logger.debug("Processing customer %s" % customer)
+        r[c] = {}
+        logger.debug("Processing customer %s" % c)
+        
         for h in listCustomerHosts(sets['basepath'], c, sets['dirmatch']):
+            r[c][h] = {}
             hosts += 1
-            hdir = os.path.join(basepath, c, h)
+            hdir = os.path.join(sets['basepath'], c, h)
             logger.debug("Checking stats for %s/%s" % (c, h))
 
             # Gather stats
             r[c][h]['alloc'] = getAllocSpace(hdir)
             r[c][h]['free'] = getFreeSpace(hdir)
-            r[c][h]['used'] = r[c][h]['alloc'] - r[c][h]['free']
-            r[c][h]['freepercent'] = int(100 - (100 * r[c][h]['used']) / r[c][h]['alloc'])
+            r[c][h]['freepercent'] = int((100 * r[c][h]['free']) / r[c][h]['alloc'])
+            if sets['skiphostused']:
+                r[c][h]['hostused'] = 'n/a'
+            else:
+                r[c][h]['hostused'] = getUsedSpace(hdir)
+
             r[c][h]['laststart'] = getLastChange(hdir, sets['bwtestfile'])
             r[c][h]['lastcomplete'] = getLastChange(hdir, sets['lastlogfile'])
             (r[c][h]['lastratelimit'], r[c][h]['lastratepercent']) = getLastRate(hdir, sets['lastlogfile'])
@@ -427,7 +514,7 @@ def main ():
             logger.debug("Checking alerts")
             
             # Test for percentage of disk space free
-            if r[c][h]['freepercent'] <= sets[alertfreepercent]:
+            if r[c][h]['freepercent'] <= sets['alertfreepercent']:
                 r[c][h]['alertfreepercent'] = True
                 r[c][h]['warnflag'] = True
                 alertlist.append("ALERT-FREE%")
@@ -436,7 +523,7 @@ def main ():
                r[c][h]['alertfreepercent'] = False
 
             # Test for absolute disk space free in GB
-            if r[c][h]['free'] <= (sets[alertfreegb] * 1024 * 1024 * 1024):
+            if r[c][h]['free'] <= (sets['alertfreegb'] * 1024 * 1024 * 1024):
                 r[c][h]['alertfreegb'] = True
                 r[c][h]['warnflag'] = True
                 alertlist.append("ALERT-FREE-GB")
@@ -453,60 +540,69 @@ def main ():
                 alertlist.append("ALERT-LATE")
                 logger.debug("Staleness Failure for %s/%s" % (c, h))
     
+    # Force out a header if CSV is enabled
+    logger.info(','.join(COLNAMES.values()))
+
     # Now cycle through customers and hosts in order and build our report
-    for c, h in sorted(r.items()):
-        # Build our output to be plain text or CSV
-        logger.debug("Generating Report Line for %s/%s" % (c, h))
-        if len(alertlist):
-            alerttext = " ".joine(alertlist)
-        else:
-            alerttext = "OK"
+    for c in sorted(r.iterkeys()):
+        for h in sorted(r[c].iterkeys()):
+            # Build our output to be plain text or CSV
+            logger.debug("Generating Report Line for %s/%s" % (c, h))
+            if len(alertlist):
+                alerttext = " ".join(alertlist)
+            else:
+                alerttext = "OK"
+                
+            if sets['csvon']:
+                oline = ','.join(
+                    c,
+                    h,
+                    r[c][h]['alloc'],
+                    r[c][h]['free'],
+                    r[c][h]['freepercent'],
+                    r[c][h]['hostused'],
+                    timeString(r[c][h]['laststart']),
+                    timeString(r[c][h]['lastcomplete']),
+                    r[c][h]['lastratelimit'],
+                    r[c][h]['lastratepercent'],
+                    alerttext
+                    )
+            else:
+                r[c][h]['alloc'] = humansize(r[c][h]['alloc'])
+                r[c][h]['free'] = humansize(r[c][h]['free'])
+                if not sets['skiphostused']:
+                    r[c][h]['hostused'] =  humansize(r[c][h]['hostused'])
 
-        if sets['csvon']:
-            oline = ','.join(
-                c, # Customer
-                h, # Hostname
-                r[c][h]['alloc'], # Allocation
-                r[c][h]['used'],  # Used Space 
-                r[c][h]['free'],  # Free Space
-                r[c][h]['freepercent'], # Free%
-            timeString(r[c][h]['laststart']), # Last Start
-            timeString(r[c][h]['lastcomplete']), # Last Complete
-                r[c][h]['lastratelimit'],     # Last Rate Limit
-                r[c][h]['lastratepercent'],    # Last Rate Limit %
-                alerttext         # Friendly list of triggered alerts
-            )
-        else:
-            oline = "%s/%s: Used/Free (Free\%): %s / %s (%s\%), Last Start/Complete: %s / %s, Last Rate Limit (Rate\%): %sKbps (%s\%), STATUS: %s" % (
-                c,
-                h,
-                r[c][h]['alloc'], # Allocation
-                r[c][h]['used'],  # Used Space 
-                r[c][h]['free'],  # Free Space
-                r[c][h]['freepercent'], # Free%
-                timeString(r[c][h]['laststart']), # Last Start
-                timeString(r[c][h]['lastcomplete']), # Last Complete
-                r[c][h]['lastratelimit'],     # Last Rate Limit
-                r[c][h]['lastratepercent'],    # Last Rate Limit %
-                alerttext
-                )
-                        
-        # Push the host results using info for normal lines or
-        # warning for alert lines
-        if r[c][h]['warnflag']:
-            logger.warning(oline)
-            warnings += 1
-        else:
-            logger.info(oline)
-
-    
-    # Send email if enabled and warranted
-    if sets['emailon']:
-        if warnings:
-            elog.send(": %s hosts checked [%s WARNING(S)] (%s)" % (str(hosts), str(warnings), time.strftime(TIMEFORMAT)), "%s Report - %s of %s hosts with warnings" % (sets['instancename'], str(warnings), str(hosts)))
-        else:
-            if not sets['warnonly']:
-                elog.send(": %s hosts checked [ALL OK] (%s)" % (str(hosts), time.strftime(TIMEFORMAT)), "%s Report - All %s hosts ok" % (sets['instancename'], str(hosts)))
+                oline = "%s/%s: Allocated/Free (Free%%): %s / %s (%s%%), Host Used: %s, Last Start/Complete: %s / %s, Last Rate Limit (Rate%%): %sKbps (%s%%), STATUS: %s" % (
+                    c,
+                    h,
+                    r[c][h]['alloc'],
+                    r[c][h]['free'],
+                    r[c][h]['freepercent'],
+                    r[c][h]['hostused'],
+                    timeString(r[c][h]['laststart']),
+                    timeString(r[c][h]['lastcomplete']),
+                    r[c][h]['lastratelimit'],
+                    r[c][h]['lastratepercent'],
+                    alerttext
+                    )
+                
+            # Push the host results using info for normal lines or
+            # warning for alert lines
+            if r[c][h]['warnflag']:
+                logger.warning(oline)
+                warnings += 1
+            else:
+                logger.info(oline)
+                
+            
+            # Send email if enabled and warranted
+            if sets['emailon']:
+                if warnings:
+                    elog.send(": %s hosts checked [%s WARNING(S)] (%s)" % (str(hosts), str(warnings), time.strftime(TIMEFORMAT)), "%s Report - %s of %s hosts with warnings" % (sets['instancename'], str(warnings), str(hosts)))
+                else:
+                    if not sets['warnonly']:
+                        elog.send(": %s hosts checked [ALL OK] (%s)" % (str(hosts), time.strftime(TIMEFORMAT)), "%s Report - All %s hosts ok" % (sets['instancename'], str(hosts)))
     exit(0)
 
 
