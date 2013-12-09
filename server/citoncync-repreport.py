@@ -24,21 +24,21 @@ CONFFILE = "/etc/citoncync-repreport.conf"  # Default config file for repreport
 RATEREGEX = 'Setting upload rate to (\d+)Kbps\s+\((\d+)\% of measured'
 TIMEFORMAT = "%Y-%m-%d %H:%M:%S"
 
-# Define our report column IDs and friendly names.  (IDs will be used in
-# CSV output and Friendly for regular)
-COLNAMES = {
-    'customer': 'Customer',
-    'hostname': 'Hostname',
-    'alloc': 'Allocated Bytes',
-    'free': 'Free Bytes',
-    'freepercent': 'Free %',
-    'hostused': 'Host Used Bytes',
-    'laststart': 'Last Start',
-    'lastcomplete': 'Last Complete',
-    'lastratelimit': 'Last Rate Limit',
-    'lastratepercent': 'Last Rate %',
-    'alerts': 'Alert Flags'
-}
+# Define our report column IDs - These will be posted at the top of CSV
+# output in the order defined
+COLNAMES = [
+    'Customer',
+    'Hostname',
+    'Allocated Bytes',
+    'Free Bytes',
+    'Free %',
+    'Host Used Bytes',
+    'Last Start Time',
+    'Last Completed Time',
+    'Last Rate Limit',
+    'Last Rate %',
+    'Alert Flags'
+]
 
 
 # Handy lambda to pretty print file sizes - From Anonymous post to
@@ -212,7 +212,7 @@ def getLastRate(folder, lastlogfile):
     m = re.findall(RATEREGEX, lfh.read())
 
     if len(m):
-        return (m[0].group(), m[1].group())
+        return m[0]
     else:
         return ('0', '0')
 
@@ -224,7 +224,7 @@ def timeString(rawdate):
 
     try:
         if rawdate:
-            stime = rawdate.strftime(TIMEFORMAT)
+            stime = time.strftime(TIMEFORMAT, time.localtime(rawdate))
         else:
             stime = "never"
     except:
@@ -287,7 +287,7 @@ class Configure(ConfigParser.ConfigParser):
         # at this time.  It will be stored in the settings hash
 
         # Check for required settings under the [conf] section
-        req = ['instancename', 'basepath', 'ignorecusts', 'dirmatch', 'bwtestfile', 'lastlogfile', 'alertfreepercent', 'alertfreegb'] 
+        req = ['instancename', 'basepath', 'ignorecusts', 'dirmatch', 'bwtestfile', 'lastlogfile', 'alertfreepercent', 'alertfreegb', 'alertstale'] 
         errs = ""
         for item in req:
             if not self.has_option('conf', item):
@@ -315,7 +315,9 @@ class Configure(ConfigParser.ConfigParser):
             # folders.  This is IO intensive, especially for a large file count.
             # Note that the per-customer stats are still accurate as long
             # as each is under thier own logical FS or ZFS folder
-            settings['skiphostused'] = 1
+            settings['skiphostused'] = True
+        else:
+            settings['skiphostused'] = False
 
         # Set our loglevel based on the warnonly and debug flags
         if settings['debugon']:
@@ -438,13 +440,37 @@ class EmailReportHandler(logging.Handler):
         msg.set_payload(body)
 
         # Fire!
-        server = smtplib.SMTP(self.smtpserver)
+        try:
+            server = smtplib.SMTP(self.smtpserver)
+            
+            # server.set_debuglevel(1)
 
-        # server.set_debuglevel(1)
+            server.sendmail(msg['From'], msg.get_all('To'), msg.as_string())
+            server.quit()
+        except Exception, err:
+            raise GeneralError("Email report failure: %s" % err)
 
-        server.sendmail(msg['From'], msg.get_all('To'), msg.as_string())
-        server.quit()
 
+
+
+class Error(Exception):
+    """
+    Base class for custom exceptions
+    """
+    pass
+
+
+class GeneralError(Error):
+    """
+    Well handled exceptions - These represent normal operation errors and not
+    coding or critical system problems
+    """
+
+    def __init__(self, msg):
+        self.msg = msg
+
+    def __str__(self):
+        return self.msg
 
 
 def main ():
@@ -483,126 +509,141 @@ def main ():
     warnings = 0
     hosts = 0
 
-    # Cycle through customer/hostname directories
-    logger.debug("Starting processing under %s" % sets['basepath'])
-    for c in listCustomers(sets['basepath'], sets['dirmatch'], sets['ignorecusts']):
-        r[c] = {}
-        logger.debug("Processing customer %s" % c)
+    # Wrap in try to catch exceptions using our custom classes
+
+    try:
+        # Cycle through customer/hostname directories
+        logger.debug("Starting processing under %s" % sets['basepath'])
+        for c in listCustomers(sets['basepath'], sets['dirmatch'], sets['ignorecusts']):
+            r[c] = {}
+            logger.debug("Processing customer %s" % c)
         
-        for h in listCustomerHosts(sets['basepath'], c, sets['dirmatch']):
-            r[c][h] = {}
-            hosts += 1
-            hdir = os.path.join(sets['basepath'], c, h)
-            logger.debug("Checking stats for %s/%s" % (c, h))
+            for h in listCustomerHosts(sets['basepath'], c, sets['dirmatch']):
+                r[c][h] = {}
+                hosts += 1
+                hdir = os.path.join(sets['basepath'], c, h)
+                logger.debug("Checking stats for %s/%s" % (c, h))
 
-            # Gather stats
-            r[c][h]['alloc'] = getAllocSpace(hdir)
-            r[c][h]['free'] = getFreeSpace(hdir)
-            r[c][h]['freepercent'] = int((100 * r[c][h]['free']) / r[c][h]['alloc'])
-            if sets['skiphostused']:
-                r[c][h]['hostused'] = 'n/a'
-            else:
-                r[c][h]['hostused'] = getUsedSpace(hdir)
-
-            r[c][h]['laststart'] = getLastChange(hdir, sets['bwtestfile'])
-            r[c][h]['lastcomplete'] = getLastChange(hdir, sets['lastlogfile'])
-            (r[c][h]['lastratelimit'], r[c][h]['lastratepercent']) = getLastRate(hdir, sets['lastlogfile'])
-
-            # Clear warn flag
-            r[c][h]['warnflag'] = False
-            alertlist = []
-            logger.debug("Checking alerts")
-            
-            # Test for percentage of disk space free
-            if r[c][h]['freepercent'] <= sets['alertfreepercent']:
-                r[c][h]['alertfreepercent'] = True
-                r[c][h]['warnflag'] = True
-                alertlist.append("ALERT-FREE%")
-                logger.debug("Free Percent Failure for %s/%s" % (c, h))
-            else:
-               r[c][h]['alertfreepercent'] = False
-
-            # Test for absolute disk space free in GB
-            if r[c][h]['free'] <= (sets['alertfreegb'] * 1024 * 1024 * 1024):
-                r[c][h]['alertfreegb'] = True
-                r[c][h]['warnflag'] = True
-                alertlist.append("ALERT-FREE-GB")
-                logger.debug("Free GB Failure for %s/%s" % (c, h))
-            else:
-                r[c][h]['alertfreegb'] = False
-            
-            # Test for staleness of last replication completion
-            if (r[c][h]['lastcomplete'] and (r[c][h]['lastcomplete'] > (proctime - sets[alertstale]))):
-                r[c][h]['alertstale']  = False
-            else:
-                r[c][h]['alertstale']  = True
-                r[c][h]['warnflag'] = True
-                alertlist.append("ALERT-LATE")
-                logger.debug("Staleness Failure for %s/%s" % (c, h))
-    
-    # Force out a header if CSV is enabled
-    logger.info(','.join(COLNAMES.values()))
-
-    # Now cycle through customers and hosts in order and build our report
-    for c in sorted(r.iterkeys()):
-        for h in sorted(r[c].iterkeys()):
-            # Build our output to be plain text or CSV
-            logger.debug("Generating Report Line for %s/%s" % (c, h))
-            if len(alertlist):
-                alerttext = " ".join(alertlist)
-            else:
-                alerttext = "OK"
-                
-            if sets['csvon']:
-                oline = ','.join(
-                    c,
-                    h,
-                    r[c][h]['alloc'],
-                    r[c][h]['free'],
-                    r[c][h]['freepercent'],
-                    r[c][h]['hostused'],
-                    timeString(r[c][h]['laststart']),
-                    timeString(r[c][h]['lastcomplete']),
-                    r[c][h]['lastratelimit'],
-                    r[c][h]['lastratepercent'],
-                    alerttext
-                    )
-            else:
-                r[c][h]['alloc'] = humansize(r[c][h]['alloc'])
-                r[c][h]['free'] = humansize(r[c][h]['free'])
-                if not sets['skiphostused']:
-                    r[c][h]['hostused'] =  humansize(r[c][h]['hostused'])
-
-                oline = "%s/%s: Allocated/Free (Free%%): %s / %s (%s%%), Host Used: %s, Last Start/Complete: %s / %s, Last Rate Limit (Rate%%): %sKbps (%s%%), STATUS: %s" % (
-                    c,
-                    h,
-                    r[c][h]['alloc'],
-                    r[c][h]['free'],
-                    r[c][h]['freepercent'],
-                    r[c][h]['hostused'],
-                    timeString(r[c][h]['laststart']),
-                    timeString(r[c][h]['lastcomplete']),
-                    r[c][h]['lastratelimit'],
-                    r[c][h]['lastratepercent'],
-                    alerttext
-                    )
-                
-            # Push the host results using info for normal lines or
-            # warning for alert lines
-            if r[c][h]['warnflag']:
-                logger.warning(oline)
-                warnings += 1
-            else:
-                logger.info(oline)
-                
-            
-            # Send email if enabled and warranted
-            if sets['emailon']:
-                if warnings:
-                    elog.send(": %s hosts checked [%s WARNING(S)] (%s)" % (str(hosts), str(warnings), time.strftime(TIMEFORMAT)), "%s Report - %s of %s hosts with warnings" % (sets['instancename'], str(warnings), str(hosts)))
+                # Gather stats
+                r[c][h]['alloc'] = getAllocSpace(hdir)
+                r[c][h]['free'] = getFreeSpace(hdir)
+                r[c][h]['freepercent'] = int((100 * r[c][h]['free']) / r[c][h]['alloc'])
+                if sets['skiphostused']:
+                    r[c][h]['hostused'] = 'n/a'
                 else:
-                    if not sets['warnonly']:
-                        elog.send(": %s hosts checked [ALL OK] (%s)" % (str(hosts), time.strftime(TIMEFORMAT)), "%s Report - All %s hosts ok" % (sets['instancename'], str(hosts)))
+                    r[c][h]['hostused'] = getUsedSpace(hdir)
+
+                r[c][h]['laststart'] = getLastChange(hdir, sets['bwtestfile'])
+                r[c][h]['lastcomplete'] = getLastChange(hdir, sets['lastlogfile'])
+                (r[c][h]['lastratelimit'], r[c][h]['lastratepercent']) = getLastRate(hdir, sets['lastlogfile'])
+                
+                # Clear warn flag
+                r[c][h]['warnflag'] = False
+                alertlist = []
+                logger.debug("Checking alerts")
+                
+                # Test for percentage of disk space free
+                if r[c][h]['freepercent'] <= int(sets['alertfreepercent']):
+                    r[c][h]['alertfreepercent'] = True
+                    r[c][h]['warnflag'] = True
+                    alertlist.append("ALERT-FREE%")
+                    logger.debug("Free Percent Failure for %s/%s" % (c, h))
+                else:
+                    r[c][h]['alertfreepercent'] = False
+
+                # Test for absolute disk space free in GB
+                if r[c][h]['free'] <= (int(sets['alertfreegb']) * 1024 * 1024 * 1024):
+                    r[c][h]['alertfreegb'] = True
+                    r[c][h]['warnflag'] = True
+                    alertlist.append("ALERT-FREE-GB")
+                    logger.debug("Free GB Failure for %s/%s" % (c, h))
+                else:
+                    r[c][h]['alertfreegb'] = False
+            
+                # Test for staleness of last replication completion
+                if (r[c][h]['lastcomplete'] and (r[c][h]['lastcomplete'] > (proctime - float(sets['alertstale'])))):
+                    r[c][h]['alertstale']  = False
+                else:
+                    r[c][h]['alertstale']  = True
+                    r[c][h]['warnflag'] = True
+                    alertlist.append("ALERT-LATE")
+                    logger.debug("Staleness Failure for %s/%s" % (c, h))
+
+                r[c][h]['alertlist'] = alertlist
+
+                
+        # Force out a header if CSV is enabled
+        if sets['csvon']:
+            logger.info(','.join(COLNAMES))
+
+        # Now cycle through customers and hosts in order and build our report
+        for c in sorted(r.iterkeys()):
+            for h in sorted(r[c].iterkeys()):
+                # Build our output to be plain text or CSV
+                logger.debug("Generating Report Line for %s/%s" % (c, h))
+                if len(r[c][h]['alertlist']):
+                    alerttext = " ".join(r[c][h]['alertlist'])
+                else:
+                    alerttext = "OK"
+                    
+                if sets['csvon']:
+                    oline = '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' % (
+                        c,
+                        h,
+                        r[c][h]['alloc'],
+                        r[c][h]['free'],
+                        r[c][h]['freepercent'],
+                        r[c][h]['hostused'],
+                        timeString(r[c][h]['laststart']),
+                        timeString(r[c][h]['lastcomplete']),
+                        r[c][h]['lastratelimit'],
+                        r[c][h]['lastratepercent'],
+                        alerttext
+                        )
+                else:
+                    r[c][h]['alloc'] = humansize(r[c][h]['alloc'])
+                    r[c][h]['free'] = humansize(r[c][h]['free'])
+                    if not sets['skiphostused']:
+                        r[c][h]['hostused'] =  humansize(r[c][h]['hostused'])
+                        
+                    oline = "===============\n%s/%s\n\tAllocated/Free (Free%%): %s / %s (%s%%)\n\tHost Used: %s\n\tLast Replication Start Time: %s\n\tLast Completed Replication Time: %s\n\tLast Rate Limit (Rate%%): %sKbps (%s%%)\n\tSTATUS: %s\n==============\n" % (
+                        c,
+                        h,
+                        r[c][h]['alloc'],
+                        r[c][h]['free'],
+                        r[c][h]['freepercent'],
+                        r[c][h]['hostused'],
+                        timeString(r[c][h]['laststart']),
+                            timeString(r[c][h]['lastcomplete']),
+                        r[c][h]['lastratelimit'],
+                        r[c][h]['lastratepercent'],
+                        alerttext
+                        )
+                
+                # Push the host results using info for normal lines or
+                # warning for alert lines
+                if r[c][h]['warnflag']:
+                    logger.warning(oline)
+                    warnings += 1
+                else:
+                    logger.info(oline)
+                    
+                    
+        # Send email if enabled and warranted
+        if sets['emailon']:
+            if warnings:
+                elog.send(": %s hosts checked [%s WARNING(S)] (%s)" % (str(hosts), str(warnings), time.strftime(TIMEFORMAT)), "%s Report - %s of %s hosts with warnings" % (sets['instancename'], str(warnings), str(hosts)))
+            else:
+                if not sets['warnonly']:
+                    elog.send(": %s hosts checked [ALL OK] (%s)" % (str(hosts), time.strftime(TIMEFORMAT)), "%s Report - All %s hosts ok" % (sets['instancename'], str(hosts)))
+    
+    
+    except GeneralError as detail:
+        logger.warning("GeneralError: %s" % detail)
+        sys.exit(1)
+    except:
+        logger.error("Unexpected errors were encountered - Please review and forward to support: %s" % "; ".join(traceback.format_exc().splitlines()))
+        
     exit(0)
 
 
