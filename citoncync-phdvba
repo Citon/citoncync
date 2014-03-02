@@ -88,9 +88,10 @@ SCHEDULE='10 18 * * *'
 # --delete-after - Remove files that are not present on the source AFTER
 #                  completing replication
 # -z - Use compression - This is OFF for PHD since the data is compressed
+# -H - Hard link support
 
-SYNCOPTS="-a --partial --partial-dir=.part --delete-after"
-
+#SYNCOPTS="-a --partial --partial-dir=.part --delete-after"
+SYNCOPTS="-a -H --delete"
 
 # Log sync messages to a logfile.  This is rotated every time the job
 # runs to prevent filling the folder with noise

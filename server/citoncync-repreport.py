@@ -1,6 +1,6 @@
 #!/usr/local/bin/python
 
-# Copyright 2013, Citon Computer Corporation
+# Copyright 2014, Citon Computer Corporation
 # Author: Paul Hirsch
 
 # citoncync-repreport - Scan a given "basepath" directory for one or more
@@ -57,10 +57,19 @@ def listCustomers (basepath,dirmatch,ignorecusts):
     pat = re.compile(r'^%s$' % dirmatch)
 
     for cust in os.listdir(basepath):
-        m = pat.search(cust)
-        if m:
-            if ignorecusts.count(cust) == 0:
-                customers.append(cust)
+        try:
+            # Try to stat the entity - One time only
+            s = os.stat(os.path.join(basepath, cust))
+        except os.error, err:
+            continue
+        
+        # Only check directories
+        if stat.S_ISDIR(s.st_mode):
+            # Now make sure the pattern matches for the customer name 
+            m = pat.search(cust)
+            if m:
+                if ignorecusts.count(cust) == 0:
+                    customers.append(cust)
     
     return customers
 
@@ -75,9 +84,18 @@ def listCustomerHosts (basepath,customer,dirmatch):
     pat = re.compile(r'^%s$' % dirmatch)
 
     for hostn in os.listdir(os.path.join(basepath, customer)):
-        m = pat.search(hostn)
-        if m:
-            hostdirs.append(hostn)
+        try:
+            # Try to stat the entity - One time only
+            s = os.stat(os.path.join(basepath, customer, hostn))
+        except os.error, err:
+            continue
+        
+        # Only check directories
+        if stat.S_ISDIR(s.st_mode):
+            # Check the name
+            m = pat.search(hostn)
+            if m:
+                hostdirs.append(hostn)
 
     return hostdirs
 
@@ -606,7 +624,7 @@ def main ():
                     if not sets['skiphostused']:
                         r[c][h]['hostused'] =  humansize(r[c][h]['hostused'])
                         
-                    oline = "===============\n%s/%s\n\tAllocated/Free (Free%%): %s / %s (%s%%)\n\tHost Used: %s\n\tLast Replication Start Time: %s\n\tLast Completed Replication Time: %s\n\tLast Rate Limit (Rate%%): %sKbps (%s%%)\n\tSTATUS: %s\n==============\n" % (
+                    oline = "===============\n%s/%s\n\tAllocated/Free (Free%%): %s / %s (%s%%)\n\tHost Used: %s\n\tLast Replication Start Time: %s\n\tLast Completed Replication Time: %s\n\tLast Rate Limit (Rate%%): %sKbps (%s%%)\n\tSTATUS: %s\n==============\n\n\n" % (
                         c,
                         h,
                         r[c][h]['alloc'],
