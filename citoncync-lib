@@ -199,8 +199,18 @@ popnlock() {
     if (set -o noclobber; echo "$$" > "${SCRIPTBASE}/.${MYSCRIPT}.pid") 2> /dev/null; then
 	trap 'rm -f "${SCRIPTBASE}/.${MYSCRIPT}.pid"; exit $?' INT TERM EXIT
     else
-	echo `${DATESTAMP}` "Previous instance running - .${MYSCRIPT}.pid with live pid. Exiting." >> ${LOGFILE}
-	exit 1
+	# Thanks to limited ps versions we are using kill to test.  Note that the
+	# failure of this test means the process is not running OR we do not have
+	# control permission on the process.  This is not a safe method!  Since
+	# we are only trying to avoid multiple replications at once, we'll roll.
+	kill -0 `cat ${SCRIPTBASE}/.${MYSCRIPT}.pid` > /dev/null 2&>1
+	if [ $? = 0 ]; then
+	    echo `${DATESTAMP}` "Previous instance running - .${MYSCRIPT}.pid with live pid. Exiting." >> ${LOGFILE}
+	    exit 1
+	else
+	    echo `${DATESTAMP}` "Stale pid file ${MYSCRIPT}.pid OR running as alternate user - Attempting removal" >> ${LOGFILE}
+	    trap 'rm -f "${SCRIPTBASE}/.${MYSCRIPT}.pid"; exit $?' INT TERM EXIT
+	fi
     fi
 }
 
