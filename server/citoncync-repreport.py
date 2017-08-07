@@ -1,4 +1,4 @@
-#!/usr/local/bin/python
+#!/usr/bin/evn python2
 
 # Copyright 2014, Citon Computer Corporation
 # Author: Paul Hirsch
